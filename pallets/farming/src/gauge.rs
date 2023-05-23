@@ -334,7 +334,9 @@ where
 							&gauge_pool_info.reward_issuer,
 							&account_to_send,
 							reward_to_claim,
-						)
+						)?;
+
+						Ok(())
 					},
 				)?;
 				gauge_info.last_claim_block = current_block_number;
