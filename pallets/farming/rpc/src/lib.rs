@@ -25,14 +25,14 @@ use jsonrpsee::{
 	proc_macros::rpc,
 	types::error::{CallError, ErrorCode, ErrorObject},
 };
-use node_primitives::{Balance, CurrencyId};
+use node_primitives::Balance;
 use sp_api::ProvideRuntimeApi;
 use sp_blockchain::HeaderBackend;
 use sp_rpc::number::NumberOrHex;
 use sp_runtime::traits::Block as BlockT;
 
 #[rpc(client, server)]
-pub trait FarmingRpcApi<BlockHash, AccountId, PoolId> {
+pub trait FarmingRpcApi<BlockHash, AccountId, PoolId, CurrencyId> {
 	/// rpc method for getting farming rewards
 	#[method(name = "farming_getFarmingRewards")]
 	fn get_farming_rewards(
@@ -65,14 +65,15 @@ impl<C, Block> FarmingRpc<C, Block> {
 }
 
 #[async_trait]
-impl<C, Block, AccountId, PoolId> FarmingRpcApiServer<<Block as BlockT>::Hash, AccountId, PoolId>
-	for FarmingRpc<C, Block>
+impl<C, Block, AccountId, PoolId, CurrencyId>
+	FarmingRpcApiServer<<Block as BlockT>::Hash, AccountId, PoolId, CurrencyId> for FarmingRpc<C, Block>
 where
 	Block: BlockT,
 	C: Send + Sync + 'static + ProvideRuntimeApi<Block> + HeaderBackend<Block>,
-	C::Api: FarmingRuntimeApi<Block, AccountId, PoolId>,
+	C::Api: FarmingRuntimeApi<Block, AccountId, PoolId, CurrencyId>,
 	AccountId: Codec,
 	PoolId: Codec,
+	CurrencyId: Codec,
 {
 	fn get_farming_rewards(
 		&self,
@@ -107,7 +108,7 @@ where
 		at: Option<<Block as BlockT>::Hash>,
 	) -> RpcResult<Vec<(CurrencyId, NumberOrHex)>> {
 		let lm_rpc_api = self.client.runtime_api();
-		let at =at.unwrap_or_else(|| self.client.info().best_hash);
+		let at = at.unwrap_or_else(|| self.client.info().best_hash);
 
 		let rs: Result<Vec<(CurrencyId, Balance)>, _> = lm_rpc_api.get_gauge_rewards(at, who, pid);
 
