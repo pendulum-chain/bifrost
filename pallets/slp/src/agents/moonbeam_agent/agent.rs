@@ -26,21 +26,23 @@ use crate::{
 	primitives::{
 		Ledger, MoonbeamLedgerUpdateEntry, MoonbeamLedgerUpdateOperation,
 		OneToManyDelegationAction, OneToManyDelegatorStatus, OneToManyLedger,
-		OneToManyScheduledRequest, QueryId, XcmOperation, MOVR, TIMEOUT_BLOCKS,
+		OneToManyScheduledRequest, QueryId, XcmOperation, TIMEOUT_BLOCKS,
 	},
 	traits::{QueryResponseManager, StakingAgent, XcmBuilder},
 	AccountIdOf, BalanceOf, Config, CurrencyDelays, DelegationsOccupied,
 	DelegatorLedgerXcmUpdateQueue, DelegatorLedgers, DelegatorsMultilocation2Index, FeeSources,
-	Hash, LedgerUpdateEntry, MinimumsAndMaximums, Pallet, TimeUnit, Validators,
+	LedgerUpdateEntry, MinimumsAndMaximums, Pallet, TimeUnit, Validators,
 	ValidatorsByDelegatorUpdateEntry, XcmDestWeightAndFee,
 };
 use codec::{alloc::collections::BTreeMap, Encode};
 use core::marker::PhantomData;
-use cumulus_primitives_core::relay_chain::HashT;
 pub use cumulus_primitives_core::ParaId;
 use frame_support::{ensure, traits::Get};
 use frame_system::pallet_prelude::BlockNumberFor;
-use node_primitives::{CurrencyId, TokenSymbol, VtokenMintingOperator, GLMR, GLMR_TOKEN_ID};
+use node_primitives::{
+	currency::{GLMR, GLMR_TOKEN_ID, MOVR},
+	CurrencyId, TokenSymbol, VtokenMintingOperator,
+};
 use orml_traits::MultiCurrency;
 use polkadot_parachain::primitives::Sibling;
 use sp_runtime::{
@@ -75,7 +77,7 @@ impl<T: Config>
 		BalanceOf<T>,
 		AccountIdOf<T>,
 		LedgerUpdateEntry<BalanceOf<T>>,
-		ValidatorsByDelegatorUpdateEntry<Hash<T>>,
+		ValidatorsByDelegatorUpdateEntry,
 		Error<T>,
 	> for MoonbeamAgent<T>
 {
@@ -91,7 +93,7 @@ impl<T: Config>
 		ensure!(delegator_multilocation != MultiLocation::default(), Error::<T>::FailToConvert);
 
 		// Add the new delegator into storage
-		Self::add_delegator(self, new_delegator_id, &delegator_multilocation, currency_id)
+		Pallet::<T>::inner_add_delegator(new_delegator_id, &delegator_multilocation, currency_id)
 			.map_err(|_| Error::<T>::FailToAddDelegator)?;
 
 		Ok(delegator_multilocation)
@@ -116,12 +118,12 @@ impl<T: Config>
 		ensure!(amount >= mins_maxs.delegation_amount_minimum.into(), Error::<T>::LowerThanMinimum);
 
 		// check if the validator is in the white list.
-		let multi_hash = T::Hashing::hash(&collator.encode());
 		let validator_list =
 			Validators::<T>::get(currency_id).ok_or(Error::<T>::ValidatorSetNotExist)?;
 		validator_list
-			.binary_search_by_key(&multi_hash, |(_multi, hash)| *hash)
-			.map_err(|_| Error::<T>::ValidatorSetNotExist)?;
+			.iter()
+			.position(|va| va == &collator)
+			.ok_or(Error::<T>::ValidatorNotExist)?;
 
 		let ledger_option = DelegatorLedgers::<T>::get(currency_id, who);
 		if let Some(Ledger::Moonbeam(ledger)) = ledger_option {
@@ -254,6 +256,11 @@ impl<T: Config>
 
 		// check if the delegator exists, if not, return error.
 		let collator = (*validator).ok_or(Error::<T>::ValidatorNotProvided)?;
+
+		// need to check if the validator is still in the validators list.
+		let validators =
+			Validators::<T>::get(currency_id).ok_or(Error::<T>::ValidatorSetNotExist)?;
+		ensure!(validators.contains(&collator), Error::<T>::ValidatorError);
 
 		let ledger_option = DelegatorLedgers::<T>::get(currency_id, who);
 		if let Some(Ledger::Moonbeam(ledger)) = ledger_option {
@@ -891,16 +898,6 @@ impl<T: Config>
 		Ok(())
 	}
 
-	/// Add a new serving delegator for a particular currency.
-	fn add_delegator(
-		&self,
-		index: u16,
-		who: &MultiLocation,
-		currency_id: CurrencyId,
-	) -> DispatchResult {
-		Pallet::<T>::inner_add_delegator(index, who, currency_id)
-	}
-
 	/// Remove an existing serving delegator for a particular currency.
 	fn remove_delegator(&self, who: &MultiLocation, currency_id: CurrencyId) -> DispatchResult {
 		// Get the delegator ledger
@@ -917,29 +914,6 @@ impl<T: Config>
 		ensure!(total.is_zero(), Error::<T>::AmountNotZero);
 
 		Pallet::<T>::inner_remove_delegator(who, currency_id)
-	}
-
-	/// Add a new serving delegator for a particular currency.
-	fn add_validator(&self, who: &MultiLocation, currency_id: CurrencyId) -> DispatchResult {
-		Pallet::<T>::inner_add_validator(who, currency_id)
-	}
-
-	/// Remove an existing serving delegator for a particular currency.
-	fn remove_validator(&self, who: &MultiLocation, currency_id: CurrencyId) -> DispatchResult {
-		// Check all the delegators' delegations, to see whether this specific validator is in use.
-		for (_, ledger) in DelegatorLedgers::<T>::iter_prefix(currency_id) {
-			if let Ledger::Moonbeam(moonbeam_ledger) = ledger {
-				ensure!(
-					!moonbeam_ledger.delegations.contains_key(who),
-					Error::<T>::ValidatorStillInUse
-				);
-			} else {
-				Err(Error::<T>::ProblematicLedger)?;
-			}
-		}
-
-		// Update corresponding storage.
-		Pallet::<T>::inner_remove_validator(who, currency_id)
 	}
 
 	/// Charge hosting fee.
@@ -1009,7 +983,7 @@ impl<T: Config>
 	fn check_validators_by_delegator_query_response(
 		&self,
 		_query_id: QueryId,
-		_entry: ValidatorsByDelegatorUpdateEntry<Hash<T>>,
+		_entry: ValidatorsByDelegatorUpdateEntry,
 		_manual_mode: bool,
 	) -> Result<bool, Error<T>> {
 		Err(Error::<T>::Unsupported)
@@ -1023,9 +997,7 @@ impl<T: Config>
 		DelegatorLedgerXcmUpdateQueue::<T>::remove(query_id);
 
 		// Deposit event.
-		Pallet::<T>::deposit_event(Event::DelegatorLedgerQueryResponseFailSuccessfully {
-			query_id,
-		});
+		Pallet::<T>::deposit_event(Event::DelegatorLedgerQueryResponseFailed { query_id });
 
 		Ok(())
 	}
@@ -1098,7 +1070,7 @@ impl<T: Config> MoonbeamAgent<T> {
 		let responder = Self::get_moonbeam_para_multilocation(currency_id)?;
 		let now = frame_system::Pallet::<T>::block_number();
 		let timeout = T::BlockNumber::from(TIMEOUT_BLOCKS).saturating_add(now);
-		let query_id = T::SubstrateResponseManager::create_query_record(&responder, timeout);
+		let query_id = T::SubstrateResponseManager::create_query_record(&responder, None, timeout);
 
 		let (call_as_subaccount, fee, weight) =
 			Self::prepare_send_as_subaccount_call_params_with_query_id(
@@ -1110,7 +1082,7 @@ impl<T: Config> MoonbeamAgent<T> {
 			)?;
 
 		let xcm_message =
-			Self::construct_xcm_message(call_as_subaccount, fee, weight, currency_id)?;
+			Self::construct_xcm_message(call_as_subaccount, fee, weight, currency_id, None)?;
 
 		Ok((query_id, timeout, fee, xcm_message))
 	}
@@ -1130,7 +1102,7 @@ impl<T: Config> MoonbeamAgent<T> {
 			)?;
 
 		let xcm_message =
-			Self::construct_xcm_message(call_as_subaccount, fee, weight, currency_id)?;
+			Self::construct_xcm_message(call_as_subaccount, fee, weight, currency_id, None)?;
 
 		let dest = Self::get_moonbeam_para_multilocation(currency_id)?;
 		send_xcm::<T::XcmRouter>(dest, xcm_message).map_err(|_e| Error::<T>::XcmFailure)?;
@@ -1150,15 +1122,8 @@ impl<T: Config> MoonbeamAgent<T> {
 			.ok_or(Error::<T>::DelegatorNotExist)?;
 
 		// Temporary wrapping remark event in Moonriver/Moonbeam for ease use of backend service.
-		let remark_call = if currency_id == MOVR {
-			MoonbeamCall::System(MoonbeamSystemCall::MoonriverRemarkWithEvent(Box::new(
-				query_id.encode(),
-			)))
-		} else {
-			MoonbeamCall::System(MoonbeamSystemCall::MoonbeamRemarkWithEvent(Box::new(
-				query_id.encode(),
-			)))
-		};
+		let remark_call =
+			MoonbeamCall::System(MoonbeamSystemCall::RemarkWithEvent(Box::new(query_id.encode())));
 
 		let call_batched_with_remark =
 			MoonbeamCall::Utility(Box::new(MoonbeamUtilityCall::BatchAll(Box::new(vec![
@@ -1717,6 +1682,7 @@ impl<T: Config>
 		extra_fee: BalanceOf<T>,
 		weight: XcmWeight,
 		currency_id: CurrencyId,
+		_query_id: Option<QueryId>,
 	) -> Result<Xcm<()>, Error<T>> {
 		let multi = Self::get_glmr_local_multilocation(currency_id)?;
 

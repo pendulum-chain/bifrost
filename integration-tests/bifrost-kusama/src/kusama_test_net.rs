@@ -20,8 +20,10 @@
 
 use bifrost_runtime_common::dollar;
 use frame_support::{traits::GenesisBuild, weights::Weight};
+use pallet_staking::Forcing;
 use polkadot_primitives::{BlockNumber, MAX_CODE_SIZE, MAX_POV_SIZE};
 use polkadot_runtime_parachains::configuration::HostConfiguration;
+use sp_runtime::Perbill;
 use xcm_emulator::{decl_test_network, decl_test_parachain, decl_test_relay_chain, ParaId};
 
 use crate::kusama_integration_tests::*;
@@ -79,7 +81,7 @@ fn default_parachains_host_configuration() -> HostConfiguration<BlockNumber> {
 		max_upward_queue_count: 8,
 		max_upward_queue_size: 1024 * 1024,
 		max_downward_message_size: 1024,
-		ump_service_total_weight: Weight::from_ref_time(4 * 1_000_000_000),
+		ump_service_total_weight: Weight::from_parts(4 * 1_000_000_000, 0),
 		max_upward_message_size: 1024 * 50,
 		max_upward_message_num_per_candidate: 5,
 		hrmp_sender_deposit: 0,
@@ -110,8 +112,37 @@ pub fn kusama_ext() -> sp_io::TestExternalities {
 	pallet_balances::GenesisConfig::<Runtime> {
 		balances: vec![
 			(AccountId::from(ALICE), 100 * KSM_DECIMALS),
+			(AccountId::from(KUSAMA_ALICE_STASH_ACCOUNT), 10000 * KSM_DECIMALS),
+			(AccountId::from(KUSAMA_BOB_STASH_ACCOUNT), 10000 * KSM_DECIMALS),
 			(ParaId::from(2001u32).into_account_truncating(), 2 * KSM_DECIMALS),
 		],
+	}
+	.assimilate_storage(&mut t)
+	.unwrap();
+	pallet_staking::GenesisConfig::<Runtime> {
+		validator_count: 50,
+		minimum_validator_count: 2,
+		invulnerables: vec![
+			AccountId::from(KUSAMA_ALICE_STASH_ACCOUNT),
+			AccountId::from(KUSAMA_BOB_STASH_ACCOUNT),
+		],
+		stakers: vec![
+			(
+				AccountId::from(KUSAMA_ALICE_STASH_ACCOUNT),
+				AccountId::from(KUSAMA_ALICE_STASH_ACCOUNT),
+				100 * KSM_DECIMALS,
+				kusama_runtime::StakerStatus::Validator,
+			),
+			(
+				AccountId::from(KUSAMA_BOB_STASH_ACCOUNT),
+				AccountId::from(KUSAMA_BOB_STASH_ACCOUNT),
+				100 * KSM_DECIMALS,
+				kusama_runtime::StakerStatus::Validator,
+			),
+		],
+		force_era: Forcing::ForceNone,
+		slash_reward_fraction: Perbill::from_percent(10),
+		..Default::default()
 	}
 	.assimilate_storage(&mut t)
 	.unwrap();

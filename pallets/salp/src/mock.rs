@@ -26,22 +26,25 @@ use frame_support::{
 	construct_runtime, ord_parameter_types, parameter_types,
 	sp_runtime::{DispatchError, DispatchResult, SaturatedConversion},
 	sp_std::marker::PhantomData,
-	traits::{EnsureOrigin, GenesisBuild, Get, Nothing},
+	traits::{EnsureOrigin, Everything, GenesisBuild, Get, Nothing},
 	weights::Weight,
 	PalletId,
 };
-use frame_system::{EnsureSignedBy, RawOrigin};
+use frame_system::{EnsureRoot, EnsureSignedBy, RawOrigin};
 use node_primitives::{
 	Amount, Balance, CurrencyId, CurrencyId::*, MessageId, ParaId, TokenSymbol, TokenSymbol::*,
 };
 use orml_traits::MultiCurrency;
 use sp_arithmetic::Percent;
-use sp_core::H256;
+use sp_core::{ConstU32, H256};
 pub use sp_runtime::Perbill;
 use sp_runtime::{
 	generic,
 	traits::{BlakeTwo256, IdentityLookup, UniqueSaturatedInto},
 };
+use xcm::prelude::*;
+use xcm_builder::FixedWeightBounds;
+use xcm_executor::XcmExecutor;
 use xcm_interface::traits::XcmHelper;
 use zenlink_protocol::{
 	AssetBalance, AssetId as ZenlinkAssetId, LocalAssetHandler, PairLpGenerate, ZenlinkMultiAssets,
@@ -72,6 +75,7 @@ construct_runtime!(
 		Salp: salp::{Pallet, Call, Storage, Event<T>},
 		ZenlinkProtocol: zenlink_protocol::{Pallet, Call, Storage, Event<T>},
 		AssetRegistry: bifrost_asset_registry::{Pallet, Call,Config<T>, Event<T>, Storage},
+		PolkadotXcm: pallet_xcm::{Pallet, Call, Storage, Event<T>, Origin, Config},
 	}
 );
 
@@ -113,7 +117,7 @@ impl frame_system::Config for Test {
 }
 
 parameter_types! {
-	pub const ExistentialDeposit: u128 = 0;
+	pub const ExistentialDeposit: u128 = 1;
 	pub const TransferFee: u128 = 0;
 	pub const CreationFee: u128 = 0;
 	pub const TransactionByteFee: u128 = 0;
@@ -133,6 +137,10 @@ impl pallet_balances::Config for Test {
 	type MaxReserves = MaxReserves;
 	type ReserveIdentifier = [u8; 8];
 	type WeightInfo = pallet_balances::weights::SubstrateWeight<Test>;
+	type HoldIdentifier = ();
+	type FreezeIdentifier = ();
+	type MaxHolds = ConstU32<0>;
+	type MaxFreezes = ConstU32<0>;
 }
 
 parameter_types! {
@@ -306,8 +314,8 @@ impl EnsureOrigin<RuntimeOrigin> for EnsureConfirmAsGovernance {
 	}
 
 	#[cfg(feature = "runtime-benchmarks")]
-	fn successful_origin() -> RuntimeOrigin {
-		RuntimeOrigin::from(RawOrigin::Signed(ConfirmMuitiSigAccount::get()))
+	fn try_successful_origin() -> Result<RuntimeOrigin, ()> {
+		Ok(RuntimeOrigin::from(RawOrigin::Signed(ConfirmMuitiSigAccount::get())))
 	}
 }
 
@@ -318,7 +326,11 @@ pub(crate) static mut MOCK_XCM_RESULT: (bool, bool) = (true, true);
 pub struct MockXcmExecutor;
 
 impl XcmHelper<crate::AccountIdOf<Test>, crate::BalanceOf<Test>> for MockXcmExecutor {
-	fn contribute(_index: ParaId, _value: Balance) -> Result<MessageId, DispatchError> {
+	fn contribute(
+		_contributer: AccountId,
+		_index: ParaId,
+		_value: Balance,
+	) -> Result<MessageId, DispatchError> {
 		let result = unsafe { MOCK_XCM_RESULT.0 };
 
 		match result {
@@ -331,6 +343,8 @@ impl XcmHelper<crate::AccountIdOf<Test>, crate::BalanceOf<Test>> for MockXcmExec
 impl salp::Config for Test {
 	type BancorPool = ();
 	type RuntimeEvent = RuntimeEvent;
+	type RuntimeCall = RuntimeCall;
+	type RuntimeOrigin = RuntimeOrigin;
 	type LeasePeriod = LeasePeriod;
 	type MinContribution = MinContribution;
 	type MultiCurrency = Tokens;
@@ -350,6 +364,71 @@ impl salp::Config for Test {
 	type CurrencyIdConversion = AssetIdMaps<Test>;
 	type CurrencyIdRegister = AssetIdMaps<Test>;
 	type ParachainId = ParaInfo;
+}
+
+parameter_types! {
+	// One XCM operation is 200_000_000 XcmWeight, cross-chain transfer ~= 2x of transfer = 3_000_000_000
+	pub UnitWeightCost: Weight = Weight::from_parts(200_000_000, 0);
+	pub const MaxInstructions: u32 = 100;
+	pub UniversalLocation: InteriorMultiLocation = X1(Parachain(2001));
+}
+
+pub struct XcmConfig;
+impl xcm_executor::Config for XcmConfig {
+	type AssetClaims = PolkadotXcm;
+	type AssetTransactor = ();
+	type AssetTrap = PolkadotXcm;
+	type Barrier = ();
+	type RuntimeCall = RuntimeCall;
+	type IsReserve = ();
+	type IsTeleporter = ();
+	type UniversalLocation = UniversalLocation;
+	type OriginConverter = ();
+	type ResponseHandler = PolkadotXcm;
+	type SubscriptionService = PolkadotXcm;
+	type Trader = ();
+	type Weigher = FixedWeightBounds<UnitWeightCost, RuntimeCall, MaxInstructions>;
+	type XcmSender = ();
+	type PalletInstancesInfo = AllPalletsWithSystem;
+	type MaxAssetsIntoHolding = ConstU32<64>;
+	type FeeManager = ();
+	type MessageExporter = ();
+	type UniversalAliases = Nothing;
+	type CallDispatcher = RuntimeCall;
+	type SafeCallFilter = Everything;
+	type AssetLocker = ();
+	type AssetExchanger = ();
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+parameter_types! {
+	pub ReachableDest: Option<MultiLocation> = Some(Parent.into());
+}
+
+impl pallet_xcm::Config for Test {
+	type RuntimeEvent = RuntimeEvent;
+	type ExecuteXcmOrigin = xcm_builder::EnsureXcmOrigin<RuntimeOrigin, ()>;
+	type UniversalLocation = UniversalLocation;
+	type SendXcmOrigin = xcm_builder::EnsureXcmOrigin<RuntimeOrigin, ()>;
+	type Weigher = FixedWeightBounds<UnitWeightCost, RuntimeCall, MaxInstructions>;
+	type XcmExecuteFilter = Nothing;
+	type XcmExecutor = XcmExecutor<XcmConfig>;
+	type XcmReserveTransferFilter = Everything;
+	type XcmRouter = ();
+	type XcmTeleportFilter = Nothing;
+	type RuntimeOrigin = RuntimeOrigin;
+	type RuntimeCall = RuntimeCall;
+	const VERSION_DISCOVERY_QUEUE_SIZE: u32 = 100;
+	type AdvertisedXcmVersion = ConstU32<2>;
+	type Currency = Balances;
+	type CurrencyMatcher = ();
+	type TrustedLockers = ();
+	type SovereignAccountOf = ();
+	type MaxLockers = ConstU32<8>;
+	type WeightInfo = pallet_xcm::TestWeightInfo; // TODO: config after polkadot impl WeightInfo for ()
+	#[cfg(feature = "runtime-benchmarks")]
+	type ReachableDest = ReachableDest;
+	type AdminOrigin = EnsureRoot<AccountId>;
 }
 
 pub struct ParaInfo;
@@ -380,6 +459,58 @@ impl WeightInfo for SalpWeightInfo {
 	fn batch_unlock(_k: u32) -> Weight {
 		Weight::zero()
 	}
+
+	fn set_multisig_confirm_account() -> Weight {
+		Weight::zero()
+	}
+
+	fn fund_success() -> Weight {
+		Weight::zero()
+	}
+
+	fn fund_fail() -> Weight {
+		Weight::zero()
+	}
+
+	fn continue_fund() -> Weight {
+		Weight::zero()
+	}
+
+	fn fund_retire() -> Weight {
+		Weight::zero()
+	}
+
+	fn fund_end() -> Weight {
+		Weight::zero()
+	}
+
+	fn create() -> Weight {
+		Weight::zero()
+	}
+
+	fn edit() -> Weight {
+		Weight::zero()
+	}
+
+	fn confirm_contribute() -> Weight {
+		Weight::zero()
+	}
+
+	fn withdraw() -> Weight {
+		Weight::zero()
+	}
+
+	fn dissolve_refunded() -> Weight {
+		Weight::zero()
+	}
+
+	fn dissolve() -> Weight {
+		Weight::zero()
+	}
+
+	fn buyback() -> Weight {
+		Weight::zero()
+	}
 }
 
 pub(crate) fn new_test_ext() -> sp_io::TestExternalities {
@@ -398,10 +529,7 @@ pub(crate) fn new_test_ext() -> sp_io::TestExternalities {
 		(Token(DOT), DOLLARS / 1000_000, None),
 	];
 	let vcurrency = vec![Native(BNC), Token(KSM), Token(MOVR)];
-	let vsbond = vec![
-		// Token, ParaId, first_slot, last_slot
-		(CurrencyId::Token(TokenSymbol::KSM), 3000, 2, 9),
-	];
+	let vsbond = vec![];
 	bifrost_asset_registry::GenesisConfig::<Test> {
 		currency,
 		vcurrency,

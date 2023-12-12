@@ -180,28 +180,8 @@ pub trait StakingAgent<
 		currency_id: CurrencyId,
 	) -> Result<(), Error>;
 
-	/// ************************************
-	/// Add a new serving delegator for a particular currency.
-	/// ************************************
-	fn add_delegator(
-		&self,
-		index: u16,
-		who: &MultiLocation,
-		currency_id: CurrencyId,
-	) -> DispatchResult;
-
 	/// Remove an existing serving delegator for a particular currency.
 	fn remove_delegator(&self, who: &MultiLocation, currency_id: CurrencyId) -> DispatchResult;
-
-	/// ************************************
-	/// Abstraction over a validator manager.
-	/// ************************************
-
-	/// Add a new serving validator for a particular currency.
-	fn add_validator(&self, who: &MultiLocation, currency_id: CurrencyId) -> DispatchResult;
-
-	/// Remove an existing serving validator for a particular currency.
-	fn remove_validator(&self, who: &MultiLocation, currency_id: CurrencyId) -> DispatchResult;
 
 	/// ************************************
 	/// Abstraction over a QueryResponseChecker.
@@ -236,16 +216,21 @@ pub trait XcmBuilder<Balance, ChainCallType, Error> {
 		extra_fee: Balance,
 		weight: XcmWeight,
 		currency_id: CurrencyId,
+		query_id: Option<QueryId>,
 		// response_back_location: AccountId
 	) -> Result<Xcm<()>, Error>;
 }
 
 /// Helper to communicate with pallet_xcm's Queries storage for Substrate chains in runtime.
-pub trait QueryResponseManager<QueryId, AccountId, BlockNumber> {
+pub trait QueryResponseManager<QueryId, AccountId, BlockNumber, RuntimeCall> {
 	// If the query exists and we've already got the Response, then True is returned. Otherwise,
 	// False is returned.
 	fn get_query_response_record(query_id: QueryId) -> bool;
-	fn create_query_record(responder: &AccountId, timeout: BlockNumber) -> u64;
+	fn create_query_record(
+		responder: &AccountId,
+		call_back: Option<RuntimeCall>,
+		timeout: BlockNumber,
+	) -> u64;
 	fn remove_query_record(query_id: QueryId) -> bool;
 }
 
