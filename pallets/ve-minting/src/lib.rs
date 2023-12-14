@@ -46,14 +46,13 @@ use frame_support::{
 };
 use frame_system::pallet_prelude::*;
 pub use incentive::*;
-use node_primitives::CurrencyId;
 use orml_traits::{MultiCurrency, MultiLockableCurrency};
 pub use pallet::*;
 use sp_core::U256;
-use sp_std::{borrow::ToOwned, collections::btree_map::BTreeMap, vec, vec::Vec};
+use sp_std::{borrow::ToOwned, collections::btree_map::BTreeMap, vec, vec::Vec, fmt::Debug};
 pub use traits::VeMintingInterface;
 pub use weights::WeightInfo;
-
+use codec::FullCodec;
 type BalanceOf<T> = <<T as Config>::MultiCurrency as MultiCurrency<AccountIdOf<T>>>::Balance;
 
 pub type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
@@ -95,15 +94,26 @@ pub mod pallet {
 	pub trait Config: frame_system::Config {
 		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 
-		type MultiCurrency: MultiCurrency<AccountIdOf<Self>, CurrencyId = CurrencyId>
-			+ MultiLockableCurrency<AccountIdOf<Self>, CurrencyId = CurrencyId>;
+		type CurrencyId: FullCodec
+			+ Eq
+			+ PartialEq
+			+ Copy
+			+ MaybeSerializeDeserialize
+			+ Debug
+			+ scale_info::TypeInfo
+			+ MaxEncodedLen
+			+ Ord
+			+ Default;
+
+		type MultiCurrency: MultiCurrency<AccountIdOf<Self>, CurrencyId = Self::CurrencyId>
+			+ MultiLockableCurrency<AccountIdOf<Self>, CurrencyId = Self::CurrencyId>;
 
 		type ControlOrigin: EnsureOrigin<Self::RuntimeOrigin>;
 
 		type WeightInfo: WeightInfo;
 
 		#[pallet::constant]
-		type TokenType: Get<CurrencyId>;
+		type TokenType: Get<Self::CurrencyId>;
 
 		#[pallet::constant]
 		type VeMintingPalletId: Get<PalletId>;
