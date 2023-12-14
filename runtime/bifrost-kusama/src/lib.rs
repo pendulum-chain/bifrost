@@ -1436,6 +1436,7 @@ parameter_types! {
 
 impl bifrost_farming::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
+	type CurrencyId = CurrencyId;
 	type MultiCurrency = Currencies;
 	type ControlOrigin = EitherOfDiverse<
 		FarmingAdmin,
@@ -2184,7 +2185,7 @@ impl_runtime_apis! {
 		}
 	}
 
-	impl bifrost_farming_rpc_runtime_api::FarmingRuntimeApi<Block, AccountId, PoolId> for Runtime {
+	impl bifrost_farming_rpc_runtime_api::FarmingRuntimeApi<Block, AccountId, PoolId, CurrencyId> for Runtime {
 		fn get_farming_rewards(who: AccountId, pid: PoolId) -> Vec<(CurrencyId, Balance)> {
 			Farming::get_farming_rewards(&who, pid).unwrap_or(Vec::new())
 		}
